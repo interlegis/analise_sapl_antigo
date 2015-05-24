@@ -32,8 +32,7 @@ class Source(object):
         if not hasattr(self, '_contents'):
             with open(self.path, 'r') as f:
                 h = HTMLParser.HTMLParser()
-                self._contents = [h.unescape(line).rstrip('\n')
-                                  for line in f.readlines()]
+                self._contents = h.unescape(f.read())
         return self._contents
 
 
