@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import HTMLParser
 import os
 from collections import defaultdict
 
@@ -7,9 +8,9 @@ basedir = "skins"
 
 class Source(object):
 
-    def __init__(self, root, filename):
+    def __init__(self, basedir, root, filename):
         self.path = os.path.join(root, filename)
-        self.id, self.extension = os.path.splitext(self.path)
+        self.id, self.extension = os.path.splitext(self.path[len(basedir) + 1:])
         self.id = self.id.replace('/', '.')
         self.extension = self.extension[1:]
         self.metadata = None
@@ -26,13 +27,22 @@ class Source(object):
         if self.extension == 'metadata':
             return os.path.splitext(self.id)[0]
 
+    @property
+    def contents(self):
+        if not hasattr(self, '_contents'):
+            with open(self.path, 'r') as f:
+                h = HTMLParser.HTMLParser()
+                self._contents = [h.unescape(line).rstrip('\n')
+                                  for line in f.readlines()]
+        return self._contents
+
 
 byext = defaultdict(list)
 sources = {}
 metadata = []
 for root, dirs, files in os.walk(basedir):
     for f in files:
-        source = Source(root[len(basedir) + 1:], f)
+        source = Source(basedir, root, f)
         if source.metaref:
             metadata.append(source)
         else:
