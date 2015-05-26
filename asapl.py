@@ -7,10 +7,6 @@ import matplotlib.pyplot as plt
 import networkx as nx
 
 
-basedir = "skins"
-sources = {}
-orphan_metadata = []
-
 EXTENSIONS = dict(
     python=['py', 'cpy', ],
     templates=['dtml', 'zsql', 'cpt', 'pt', ],
@@ -38,8 +34,7 @@ class Source(object):
         self.metadata = None
 
     def __repr__(self):
-        return '%s - %s [%s]%s' % (
-            self.extension.upper(),
+        return '%s [%s]%s' % (
             self.id,
             self.path,
             ' (WITH METADATA)' if self.metadata else '')
@@ -59,85 +54,150 @@ class Source(object):
                 self._contents = h.unescape(decoded)
         return self._contents
 
-    @property
-    def deps(self):
-        if not hasattr(self, '_deps'):
-            self._deps = [source for source in sources.values()
-                          if source.id in self.contents]
-        return self._deps
-
-    # UTILS
     def subl(self):
-        os.system('subl %s' % s.path)
+        os.system('subl %s' % self.path)
 
 
-# collect sources
-byext = defaultdict(list)
-metadata = []
-for root, dirs, files in os.walk(basedir):
-    for f in files:
-        if any(f.endswith(ig) for ig in IGNORED_ENDINGS):
-            continue
-        source = Source(basedir, root, f)
-        if source.metaref:
-            metadata.append(source)
+utils = ['index_html',
+         'mensagem_emitir',
+         'standard_html_footer',
+         'standard_html_header',
+         'pysc.data_converter_pysc',
+         'pysc.PageListOutput_pysc',
+         'pysc.verifica_conector_bd_pysc',
+         'materia_header',
+         'mensagem_popup_emitir',
+         'standard_css_slot',
+         'pysc.sessao_plenaria_log_pysc',
+         'pysc.periodo_legislatura_format_pysc',
+         'pysc.port_to_iso_pysc',
+         'pysc.iso_to_port_pysc',
+         'pysc.extrai_id_pysc',
+         'pysc.ano_abrevia_pysc',
+         'pysc.browser_verificar_pysc',
+         'documento_header',
+         'zsql.trans_rollback_zsql',
+         'zsql.trans_begin_zsql',
+         'zsql.trans_commit_zsql',
+         'pysc.username_pysc',
+         'pysc.data_atual_iso_pysc',
+         'pysc.data_converter_por_extenso_pysc'
+         ]
+
+
+class Codebase(object):
+
+    def __init__(self, basedir='skins'):
+        self.basedir = basedir
+
+        self.source_dict = {}
+        self.orphan_metadata = []
+
+        # collect sources
+        metadata = []
+        for root, dirs, files in os.walk(basedir):
+            for f in files:
+                if any(f.endswith(ig) for ig in IGNORED_ENDINGS):
+                    continue
+                source = Source(basedir, root, f)
+                if source.metaref:
+                    metadata.append(source)
+                else:
+                    self.source_dict[source.id] = source
+        # associate metadata
+        for meta in metadata:
+            if meta.metaref in self.source_dict:
+                self.source_dict[meta.metaref].metadata = meta
+            else:
+                self.orphan_metadata.append(meta)
+        # remove utils
+        for util in utils:
+            del self.source_dict[util]
+        # preset deps
+        source_list = self.source_dict.values()
+        for source in source_list:
+            source._alldeps = [dep for dep in source_list if dep.id in source.contents]
+        self.redep()
+
+    def redep(self):
+        for source in self.source_dict.values():
+            source.deps, source.backrefs = [], []
+        for source in self.source_dict.values():
+            for dep in self.source_dict.values():
+                if dep in source._alldeps:
+                    source.deps.append(dep)
+                    dep.backrefs.append(source)
+
+    @property
+    def sources(self):
+        return self.source_dict.values()
+
+    def util(self, source_or_id):
+        if isinstance(source_or_id, str):
+            source = self.source_dict[source_or_id]
         else:
-            byext[source.extension].append(source)
-            sources[source.id] = source
-# associate metadata
-for meta in metadata:
-    if meta.metaref in sources:
-        sources[meta.metaref].metadata = meta
-    else:
-        orphan_metadata.append(meta)
+            source = source_or_id
+        utils.append(source.id)
+        del self.source_dict[source.id]
 
-# adjustments
-del sources['index_html']
-del sources['mensagem_emitir']
-del sources['standard_html_footer']
-del sources['standard_html_header']
+    def count_backrefs(self, min=0, max=float("inf")):
+        return sorted([(len(s.backrefs), s)
+                       for s in self.sources if min <= len(s.backrefs) <= max])
 
+    def prune(self, min=0):
+        for l, source in self.count_backrefs(min):
+            del self.source_dict[source.id]
 
-def mark_backrefs():
-    for source in sources.values():
-        source.backrefs = []
-    for source in sources.values():
-        for dep in source.deps:
-            dep.backrefs.append(source)
+    def build_graph(self):
+        self.redep()
 
-mark_backrefs()
+        D = nx.DiGraph()
+        for source in self.sources:
+            D.add_node(source.id)
+            for dep in source.deps:
+                if dep in self.sources:
+                    D.add_edge(source.id, dep.id)
+        return D
 
-
-def build_graph(source_list):
-    D = nx.DiGraph()
-    for source in source_list:
-        D.add_node(source.id)
-        for dep in source.deps:
-            if dep in source_list:
-                D.add_edge(source.id, dep.id)
-    return D
+    def subl(self, source=None):
+        if source is None:
+            source = raw_input()
+        if isinstance(source, str):
+            if source in self.source_dict:
+                source = self.source_dict[source]
+            else:
+                return
+        source.subl()
 
 
-def build_all_sources_graph():
-    return build_graph(sources.values())
+def redigraph(graph, digraph):
+    new = nx.DiGraph()
+    new.add_nodes_from(graph)
+    new.add_edges_from(
+        (a, b) if (a, b) in digraph.edges() else (b, a)
+        for a, b in graph.edges())
+    return new
 
 
-def show(G):
-    nx.draw_graphviz(G, with_labels=True)
+def show(graph):
+    nx.draw_graphviz(graph, with_labels=True, font_size=20)
     plt.show()
 
 
 def connected(graph):
-    if isinstance(graph, nx.DiGraph):
-        graph = graph.to_undirected()
-    return list(nx.connected_component_subgraphs(graph))
+    is_digraph = isinstance(graph, nx.DiGraph)
+    undirected = graph.to_undirected() if is_digraph else graph
+    components = nx.connected_component_subgraphs(undirected)
+    if is_digraph:
+        components = (redigraph(g, graph) for g in components)
+    return list(components)
 
 
 ######################################################################
-# ANALISE
+# tools
 
-count_backrefs = sorted([(len(s.backrefs), s.id) for s in sources.values() if len(s.backrefs) > 0])
+cb = Codebase()
 
 
-def subl(source_list):
-    os.system('subl ' + ' '.join(s.path for s in source_list))
+def subl(sources):
+    os.system('subl ' + ' '.join(s.path for s in sources))
